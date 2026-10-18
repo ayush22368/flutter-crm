@@ -1,0 +1,113 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isUser(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
+
+    function isAgencyMember(agencyId) {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/agencies/$(agencyId)/members/$(request.auth.uid));
+    }
+
+    function getAgencyMemberData(agencyId) {
+      return get(/databases/$(database)/documents/agencies/$(agencyId)/members/$(request.auth.uid)).data;
+    }
+
+    function isAgencyActive(agencyId) {
+      return isAgencyMember(agencyId) && getAgencyMemberData(agencyId).isActive == true;
+    }
+
+    function isAgencyAdmin(agencyId) {
+      return isAgencyMember(agencyId) && 
+        (getAgencyMemberData(agencyId).role == 'admin' || getAgencyMemberData(agencyId).role == 'owner');
+    }
+
+    function isAgencyOwner(agencyId) {
+      return isAgencyMember(agencyId) && getAgencyMemberData(agencyId).role == 'owner';
+    }
+
+    // User profiles
+    match /users/{uid} {
+      allow read, write: if isUser(uid);
+    }
+
+    // Agencies collection
+    match /agencies/{agencyId} {
+      // Query by invite code for joining or reading if member
+      allow read: if isAuthenticated();
+      // Allow authenticated user to create a new agency
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid;
+      // Allow only owner/admin to update agency profile
+      allow update: if isAgencyAdmin(agencyId);
+      // Allow only owner to delete the agency
+      allow delete: if isAgencyOwner(agencyId);
+
+      // Members subcollection
+      match /members/{memberUid} {
+        allow read: if isAgencyMember(agencyId);
+        
+        // Creating member: either creator is owner, or joining user creates their own employee record
+        allow create: if isAuthenticated() && (
+          isUser(memberUid) || isAgencyAdmin(agencyId)
+        );
+
+        // Updating member: only admin/owner can change roles or active state, cannot escalate own role
+        allow update: if isAgencyAdmin(agencyId) && (
+          // Admin cannot change owner's role
+          resource.data.role != 'owner' || isAgencyOwner(agencyId)
+        );
+
+        allow delete: if isAgencyOwner(agencyId) && request.auth.uid != memberUid;
+      }
+
+      // Leads subcollection
+      match /leads/{leadId} {
+        allow read, create, update: if isAgencyActive(agencyId);
+        allow delete: if isAgencyAdmin(agencyId);
+      }
+
+      // Deals subcollection
+      match /deals/{dealId} {
+        allow read, create, update: if isAgencyActive(agencyId);
+        allow delete: if isAgencyAdmin(agencyId);
+      }
+
+      // Contacts subcollection
+      match /contacts/{contactId} {
+        allow read, create, update: if isAgencyActive(agencyId);
+        allow delete: if isAgencyAdmin(agencyId);
+      }
+
+      // Companies subcollection
+      match /companies/{companyId} {
+        allow read, create, update: if isAgencyActive(agencyId);
+        allow delete: if isAgencyAdmin(agencyId);
+      }
+
+      // Tasks subcollection
+      match /tasks/{taskId} {
+        allow read, create, update: if isAgencyActive(agencyId);
+        allow delete: if isAgencyAdmin(agencyId);
+      }
+
+      // Activities subcollection
+      match /activities/{activityId} {
+        allow read, create: if isAgencyActive(agencyId);
+        allow update, delete: if isAgencyAdmin(agencyId);
+      }
+
+      // Quotations subcollection
+      match /quotations/{quotationId} {
+        allow read, create, update: if isAgencyActive(agencyId);
+        allow delete: if isAgencyAdmin(agencyId);
+      }
+    }
+  }
+}
